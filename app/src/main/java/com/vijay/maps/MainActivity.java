@@ -2,22 +2,38 @@ package com.vijay.maps;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
+import android.app.AlertDialog;
 import android.app.Dialog;
+import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Point;
+import android.graphics.drawable.Drawable;
 import android.location.Location;
+import android.net.Uri;
+import android.os.AsyncTask;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.SystemClock;
 import android.util.Log;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.Window;
+import android.view.animation.Interpolator;
+import android.view.animation.LinearInterpolator;
+import android.widget.CompoundButton;
+import android.widget.LinearLayout;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
-
-import io.reactivex.rxjava3.annotations.NonNull;
-
+import androidx.appcompat.widget.SwitchCompat;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
@@ -32,8 +48,9 @@ import com.google.android.gms.location.LocationServices;
 import com.google.android.gms.maps.CameraUpdateFactory;
 import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.OnMapReadyCallback;
+import com.google.android.gms.maps.Projection;
 import com.google.android.gms.maps.SupportMapFragment;
-import com.google.android.gms.maps.UiSettings;
+import com.google.android.gms.maps.model.BitmapDescriptorFactory;
 import com.google.android.gms.maps.model.ButtCap;
 import com.google.android.gms.maps.model.CameraPosition;
 import com.google.android.gms.maps.model.JointType;
@@ -51,12 +68,29 @@ import com.google.android.libraries.places.api.net.PlacesClient;
 import com.google.android.libraries.places.widget.Autocomplete;
 import com.google.android.libraries.places.widget.AutocompleteActivity;
 import com.google.android.libraries.places.widget.model.AutocompleteActivityMode;
+import com.google.android.material.progressindicator.CircularProgressIndicator;
+import com.google.maps.android.PolyUtil;
+import com.google.maps.android.SphericalUtil;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Timer;
+import java.util.TimerTask;
 
 import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
+import io.reactivex.rxjava3.annotations.NonNull;
 import io.reactivex.rxjava3.core.SingleObserver;
 import io.reactivex.rxjava3.disposables.Disposable;
 import io.reactivex.rxjava3.schedulers.Schedulers;
@@ -64,22 +98,19 @@ import retrofit2.Retrofit;
 import retrofit2.adapter.rxjava3.RxJava3CallAdapterFactory;
 import retrofit2.converter.gson.GsonConverterFactory;
 
-public class MainActivity extends AppCompatActivity
-        implements OnMapReadyCallback {
+public class MainActivity extends AppCompatActivity implements OnMapReadyCallback {
 
     /* INTEGERS */
     private static final int
             AUTOCOMPLETE_REQUEST_CODE = 1,
             REQUEST_CODE = 200,
-            DEFAULT_ZOOM = 15,
-            PLAY_SERVICES_ERROR_CODE = 300;
+            PLAY_SERVICES_ERROR_CODE = 300,
+            NEAR_DESTINATION_LENGTH = 20; // if we reach 20
 
     /* STRINGS */
     public static final String
             TAG = "XXX",
-            MAP_API = "https://maps.googleapis.com/",
-            KEY_CAMERA_POSITION = "camera_position",
-            KEY_LOCATION = "location";
+            MAP_API = "https://maps.googleapis.com/";
 
     private final LatLng defaultLocation = new LatLng(-33.8523341, 151.2106085);
 
@@ -88,23 +119,49 @@ public class MainActivity extends AppCompatActivity
     private FusedLocationProviderClient fusedLocationProviderClient;
     private LocationRequest locationRequest;
     private LocationCallback locationCallback;
-    private Location lastKnownLocation;
-    private Location currentLocation;
+    private Location lastLocation, currentLocation;
+
+    private LatLng origin, destination;
+
+    private ArrayList<LatLng> polyLineList;
+    private ArrayList<LatLng> listLivePolylinePoints;
+    private ArrayList<LatLng> listPolygonPoints;
+    private ArrayList<Polyline> listAllPolyLines; // for removing polylines
+    private ArrayList<Marker> listAllMarkers; // for removing markers
 
     private ApiInterface apiInterface;
-    private List<LatLng> polyLineList;
-    private PolylineOptions polyLineOptions;
-    private LatLng latLngOrigin, latLngDestination;
-    private ArrayList<LatLng> al_LatLng;
+    int currentPointOnPolyLine; // initially zero in oncreate
 
-    private ArrayList<Polyline> listPloyLine; // for removing polyline
-    private ArrayList<Marker> listMarkers; // for removing markers
+    private boolean needRecenter, isDriving, isMarkingDestination, areRealUpdates;
 
-    private boolean isRecenter, isDriving, isMarkingDestination;
+    Bitmap bitmapCar;
+    Marker markerCar;
+
+    Timer timer; // for fake location updates
+
+    // polyLine properties while driving
+    int colorPolyLine = R.color.veryLightGreen, widthPolyLine = 15;
+
+    final int DEFAULT_ZOOM = 18; // 10 shows India, 15 shows streets
+    int zoomCurrent = 18;
+    float tiltCurrent = 45f;
+    double tripDistance, distanceCovered;
+
+    final long intervalLocationUpdate = 5000,
+            intervalFastestUpdate = 2000,
+            MOVE_ANIMATION_DURATION = 1000;
+
+    SwitchCompat fakeSwitch;
+
+    AlertDialog dialogView; // show/hide progress bar
 
     // views here
-    TextView tv_search, tv_startDriving, tv_getDirections,
-            tv_recenter, tv_markOnMap;
+    TextView tvb_search, tvb_startDriving, tvb_getDirections,
+            tvb_recenter, tvb_markDestination, tvb_resetMarker,
+            tvb_openGoogleMaps, tv_dataRealtime, tv_zoomLevel, tv_tips;
+    SeekBar seekbar_zoomSet;
+
+    LinearLayout linearL_setZoom;
     private boolean save;
 
     @Override
@@ -112,31 +169,34 @@ public class MainActivity extends AppCompatActivity
 
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-        /*
-        Toolbar toolbar = findViewById(R.id.toolbar);
-        setSupportActionBar(toolbar);
-        */
 
-        initMapWork();
         SupportMapFragment supportMapFragment = (SupportMapFragment)
                 getSupportFragmentManager().findFragmentById(R.id.googleMaps);
 
         supportMapFragment.getMapAsync(this);
-        isDriving = false;
-        listPloyLine = new ArrayList<>();
-        listMarkers = new ArrayList<>();
-        isMarkingDestination = false;
+
+        listAllPolyLines = new ArrayList<>();
+        listAllMarkers = new ArrayList<>();
+        listPolygonPoints = new ArrayList<>();
+        listLivePolylinePoints = new ArrayList<>();
     }
 
-    // for ease access, called when map is ready
-    private void afterOnMapReady() {
-        isRecenter = true;
-        fusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(this);
+    // ask for permission and play services availability?
+    private void initMapWork(GoogleMap googleMap) {
 
-        LatLng destLatLng = new LatLng(26.892481, 75.728652);
-        Location destLocation = new Location("");
-        destLocation.setLatitude(destLatLng.latitude);
-        destLocation.setLongitude(destLatLng.latitude);
+        if (!checkLocationPermission()) {
+            toast("Please give permissions to use location.");
+        } else if (!isServicesOk()) {
+            toast("Play Services not available.");
+        }
+        bitmapCar = getBitmap(R.drawable.ic_car);
+
+        map = googleMap;
+        map.setTrafficEnabled(true);
+        map.setMapType(GoogleMap.MAP_TYPE_SATELLITE);
+
+        fusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(this);
+        getDeviceLocation();
 
         // here are the results:
         locationCallback = new LocationCallback() {
@@ -145,127 +205,249 @@ public class MainActivity extends AppCompatActivity
                                                  LocationResult locationResult) {
                 super.onLocationResult(locationResult);
                 Location location = locationResult.getLastLocation();
-                updateCameraPosition(location, destLocation);
+                currentLocation = location;
+
+                //LatLng latLngLastKnown = new LatLng(lastKnownLocation.getLatitude(), lastKnownLocation.getLongitude());
+                LatLng lastLngCurrent = new LatLng(location.getLatitude(), location.getLongitude());
+
+                LatLng prev, next, current;
+
+                current = listPolygonPoints.get(currentPointOnPolyLine);
+
+                if (currentPointOnPolyLine == 0) prev = current;
+                else prev = listPolygonPoints.get(currentPointOnPolyLine - 1);
+
+                if (currentPointOnPolyLine == listPolygonPoints.size() - 1) next = current;
+                else next = listPolygonPoints.get(currentPointOnPolyLine + 1);
+
+                ArrayList<LatLng> listSegment = new ArrayList<>();
+                listSegment.add(prev);
+                listSegment.add(current);
+                listSegment.add(next);
+
+                if (PolyUtil.isLocationOnPath(toLatLng(currentLocation),
+                        listSegment, true, 30)) {
+
+                    if (areRealUpdates) {
+                        LatLng snappedToSegment = getMarkerProjectionOnSegment(
+                                toLatLng(currentLocation), listSegment, map.getProjection());
+                        currentLocation = toLocation(snappedToSegment);
+                    }
+                    updateCameraPosition(currentLocation);
+                } else {
+                    Toast.makeText(MainActivity.this, "Not on path", Toast.LENGTH_SHORT).show();
+                }
+
             }
         };
 
         locationRequest = LocationRequest.create();
         locationRequest.setPriority(LocationRequest.PRIORITY_BALANCED_POWER_ACCURACY);
-        locationRequest.setInterval(5000);
-        locationRequest.setFastestInterval(2000);
+        locationRequest.setInterval(intervalLocationUpdate);
+        locationRequest.setFastestInterval(intervalFastestUpdate);
 
-        // it animates camera to current location when user start app.
-        // it is one time use (onCompleteListener)
-        getDeviceLocation();
+        tvb_recenter = findViewById(R.id.tv_recenter);
+        map.setOnMapClickListener(new GoogleMap.OnMapClickListener() {
+            @Override
+            public void onMapClick(@androidx.annotation.NonNull @NonNull LatLng latLng) {
+                if (isMarkingDestination) {
+                    listAllMarkers.add(map.addMarker(new MarkerOptions().position(latLng)));
+                    destination = latLng;
+                    isMarkingDestination = false;
+                    tvb_markDestination.setText("Mark On Map");
+                    hideViews(new View[]{tvb_search, tvb_markDestination});
+                    showViews(new View[]{tvb_getDirections, tvb_resetMarker, tvb_openGoogleMaps});
+                } else {
+                    needRecenter = false;
+                    showViews(new View[]{tvb_recenter});
+                }
+            }
+        });
 
-        tv_search = findViewById(R.id.tv_searchResult);
-        tv_search.setText("Search Location");
-        tv_search.setOnClickListener(view -> {
+        tvb_search = findViewById(R.id.tv_searchResult);
+        tvb_search.setText("Search Location");
+        tvb_search.setOnClickListener(view -> {
             searchGoogleMap();
         });
 
-        tv_startDriving = findViewById(R.id.tv_startDriving);
-        tv_startDriving.setOnClickListener(new View.OnClickListener() {
+        tvb_startDriving = findViewById(R.id.tv_startDriving);
+        tvb_startDriving.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
                 startDriving();
             }
         });
 
-        tv_getDirections = findViewById(R.id.tv_getDirections);
-        tv_getDirections.setOnClickListener(new View.OnClickListener() {
+        tvb_getDirections = findViewById(R.id.tv_getDirections);
+        tvb_getDirections.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
                 drawDirections();
             }
         });
 
-        tv_recenter = findViewById(R.id.tv_recenter);
-        tv_recenter.setOnClickListener(new View.OnClickListener() {
+        tvb_recenter.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                isRecenter = true;
-                LatLng latLng = new LatLng(currentLocation.getLatitude(), currentLocation.getLongitude());
-                float bearing = 0;
-                if (lastKnownLocation != null && currentLocation != null)
-                    bearing = lastKnownLocation.bearingTo(currentLocation);
-                map.animateCamera(CameraUpdateFactory.newCameraPosition
-                        (new CameraPosition.Builder().target(latLng).zoom(18).bearing(bearing).tilt(45f).build()));
+                recenterMap();
             }
         });
 
-        map.setOnMapClickListener(new GoogleMap.OnMapClickListener() {
-            @Override
-            public void onMapClick(@androidx.annotation.NonNull @NonNull LatLng latLng) {
-                isRecenter = false;
-                if (isMarkingDestination) {
-                    toast("Destination Selected: " + latLng.toString());
-                    listMarkers.add(map.addMarker(new MarkerOptions().position(latLng)));
-                    latLngDestination = latLng;
-                    isMarkingDestination = false;
-                    tv_markOnMap.setVisibility(View.INVISIBLE);
-                    tv_getDirections.setVisibility(View.VISIBLE);
-                    tv_markOnMap.setText("Mark On Map");
-                }
-            }
-        });
-
-        tv_markOnMap = findViewById(R.id.tv_markOnMap);
-        tv_markOnMap.setOnClickListener(new View.OnClickListener() {
+        tvb_markDestination = findViewById(R.id.tv_markOnMap);
+        tvb_markDestination.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                tv_markOnMap.setText("Please select a location.");
+                tvb_markDestination.setText("Please select a location on map.");
                 isMarkingDestination = true;
-                tv_search.setVisibility(View.GONE);
+                tvb_search.setVisibility(View.GONE);
             }
         });
 
-        if (ActivityCompat.checkSelfPermission(this,
-                Manifest.permission.ACCESS_FINE_LOCATION) !=
-                PackageManager.PERMISSION_GRANTED
-                && ActivityCompat.checkSelfPermission(this,
-                Manifest.permission.ACCESS_COARSE_LOCATION) !=
-                PackageManager.PERMISSION_GRANTED) {
-            return;
-        }
+        fakeSwitch = findViewById(R.id.switchUpdateType);
+        fakeSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton compoundButton, boolean b) {
+                areRealUpdates = b;
+                if (b) toast("You will receive REAL Location Updates");
+                else toast("You will receive FAKE location Updates");
+            }
+        });
+
+        tvb_resetMarker = findViewById(R.id.tv_resetMarkers);
+        tvb_resetMarker.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                for (Marker marker : listAllMarkers) marker.remove();
+                for (Polyline polyline : listAllPolyLines) polyline.remove();
+                listAllPolyLines.clear();
+                listAllMarkers.clear();
+                listPolygonPoints.clear();
+                listLivePolylinePoints.clear();
+
+                showViews(new View[]{tvb_search, tvb_markDestination});
+                hideViews(new View[]{tvb_resetMarker, tvb_getDirections, tvb_startDriving,
+                        tvb_recenter, tvb_openGoogleMaps, tv_dataRealtime});
+            }
+        });
+
+        tvb_openGoogleMaps = findViewById(R.id.tv_openInMaps);
+        tvb_openGoogleMaps.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                openInGoogleMaps();
+            }
+        });
+
+        tv_dataRealtime = findViewById(R.id.tv_data); // for speed, distance etc.
+
+        tv_zoomLevel = findViewById(R.id.tv_zoomLevel);
+        tv_zoomLevel.setText("Drving Zoom Level: " + zoomCurrent);
+
+        seekbar_zoomSet = findViewById(R.id.seekbar_zoomSet);
+        seekbar_zoomSet.setProgress(zoomCurrent, true);
+        seekbar_zoomSet.setMax(24);
+        seekbar_zoomSet.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int i, boolean b) {
+                zoomCurrent = i;
+                tv_zoomLevel.setText("Driving Zoom Level: " + zoomCurrent);
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+            }
+        });
+
+        linearL_setZoom = findViewById(R.id.ll_setZoom);
+
+        tv_tips = findViewById(R.id.tv_tips);
     }
 
+    @SuppressLint("MissingPermission")
     private void startDriving() {
-        getDeviceLocation();
         // was not driving now we start driving
         if (!isDriving) {
             isDriving = true;
-            // now we are driving
-            startLoopForCurrentLocation();
-            tv_startDriving.setText("Cancel Trip?");
-            tv_search.setVisibility(View.GONE);
-            tv_markOnMap.setVisibility(View.GONE);
-            tv_getDirections.setVisibility(View.INVISIBLE);
-            tv_recenter.setVisibility(View.VISIBLE);
+            if (currentLocation != null) {
+                map.animateCamera(CameraUpdateFactory.newCameraPosition(
+                        CameraPosition.builder()
+                                .target(toLatLng(currentLocation))
+                                .zoom(DEFAULT_ZOOM).build()));
+            }
+            needRecenter = true;
+            tvb_startDriving.setCompoundDrawablesWithIntrinsicBounds(
+                    toDrawable(R.drawable.ic_baseline_cancel_24), null, null, null);
+            map.setMyLocationEnabled(false);
+            startLocationCallback(areRealUpdates);
+            tvb_startDriving.setText(" Stop Driving?");
+            hideViews(new View[]{tvb_markDestination, tvb_getDirections, tvb_search,
+                    tvb_resetMarker, fakeSwitch});
+            showViews(new View[]{tvb_recenter, linearL_setZoom});
         } else {
-            // user cancelled driving
-            isDriving = false;
-            tv_startDriving.setText("Start Driving");
-            tv_search.setVisibility(View.VISIBLE);
-            tv_markOnMap.setVisibility(View.VISIBLE);
-            tv_getDirections.setVisibility(View.GONE);
-            tv_recenter.setVisibility(View.GONE);
-            tv_startDriving.setVisibility(View.GONE);
-            fusedLocationProviderClient.removeLocationUpdates(locationCallback);
+            stopDriving();
+        }
+    }
 
-            // removing all markers, polylines when user stop driving
-            for (Polyline polyLine : listPloyLine)
-                polyLine.remove();
+    @SuppressLint("MissingPermission")
+    private void stopDriving() {
+        isDriving = false;
+        Toast.makeText(this, "Trip Completed", Toast.LENGTH_LONG).show();
+        removePolyLinesAndMarkers();
+        //user cancelled driving
+        tvb_startDriving.setText(" Start Driving");
+        tvb_startDriving.setCompoundDrawablesWithIntrinsicBounds(
+                toDrawable(R.drawable.ic_baseline_directions_car_24), null, null, null);
+        showViews(new View[]{tvb_search, tvb_markDestination, tv_tips});
+        hideViews(new View[]{tvb_getDirections, tvb_recenter, tvb_startDriving,
+                tvb_openGoogleMaps, tv_dataRealtime, linearL_setZoom});
+        fusedLocationProviderClient.removeLocationUpdates(locationCallback);
+        if (timer != null) timer.cancel();
+        isMarkingDestination = false;
+        needRecenter = false;
+        currentPointOnPolyLine = 0; // do not do that in reset driving
+        listAllPolyLines.clear();
+        listAllMarkers.clear();
+        listPolygonPoints.clear();
+        listLivePolylinePoints.clear();
+        map.setMyLocationEnabled(true);
+        fakeSwitch.setVisibility(View.VISIBLE);
+    }
 
-            listPloyLine.clear();
+    private void updateCameraPosition(Location currentLocation) {
 
-            for (Marker marker : listMarkers)
-                marker.remove();
+        if (lastLocation == null) lastLocation = currentLocation;
 
-            listMarkers.clear();
-            // also clearing lists for next searches and trips
+        double headingDirection = SphericalUtil.computeHeading(
+                toLatLng(lastLocation), toLatLng(currentLocation));
+
+        CameraPosition cameraPosition = new CameraPosition.Builder()
+                .target(toLatLng(currentLocation))
+                .zoom(zoomCurrent)
+                .tilt(tiltCurrent)
+                .bearing((float) headingDirection)
+                .build();
+
+        if (needRecenter) map.animateCamera(CameraUpdateFactory.newCameraPosition(cameraPosition));
+
+        // this list contain latLng to create a polyline
+        listLivePolylinePoints.add(toLatLng(currentLocation));
+
+        //drawPolyLineWhereWalked(listLivePolylinePoints);
+        updateCarLocation(this.currentLocation);
+
+        //stopping if we have reached in a radius of 20m from destination
+        if (SphericalUtil.computeDistanceBetween(toLatLng(currentLocation), destination)
+                < NEAR_DESTINATION_LENGTH) {
+            stopDriving();
         }
 
+        // make sure to update previousLoc at last
+        lastLocation = currentLocation;
     }
 
     private void drawPolyLineWhereWalked(ArrayList<LatLng> latLngArrayList) {
@@ -277,71 +459,96 @@ public class MainActivity extends AppCompatActivity
                 .jointType(JointType.ROUND)
                 .addAll(latLngArrayList);
 
-        listPloyLine.add(map.addPolyline(polyLineOptions));
-    }
-
-    private void updateCameraPosition(Location currentLocation, Location destLocation) {
-
-        LatLng currentLatLng = new LatLng(currentLocation.getLatitude(), currentLocation.getLongitude());
-        if (lastKnownLocation == null) lastKnownLocation = currentLocation;
-
-        // calculate bearing to find heading direction
-        float bearingValue = lastKnownLocation.bearingTo(currentLocation);
-
-        CameraPosition cameraPosition;
-        if (currentLocation.distanceTo(lastKnownLocation) > 50)
-            cameraPosition = new CameraPosition.Builder()
-                    .target(currentLatLng).zoom(20).tilt(45f).bearing(bearingValue).build();
-        else
-            cameraPosition = new CameraPosition.Builder()
-                    .target(currentLatLng).zoom(20).tilt(45f).build();
-
-        if (isRecenter) map.animateCamera(CameraUpdateFactory.newCameraPosition(cameraPosition));
-
-        lastKnownLocation = currentLocation;
-
-        // this list contain latLng to create a polyline
-        if (al_LatLng == null) al_LatLng = new ArrayList<>();
-        al_LatLng.add(currentLatLng);
-
-        drawPolyLineWhereWalked(al_LatLng);
-
-        // stopping if we have reached in a radius of 30m from destination
-        if (currentLocation.distanceTo(destLocation) < 30) stopDriving();
-    }
-
-    private void stopDriving() {
-
+        listAllPolyLines.add(map.addPolyline(polyLineOptions));
     }
 
     // starts Handler for getting current location every 5 seconds
-    private void startLoopForCurrentLocation() {
+    private void startLocationCallback(boolean real) {
 
-        if (ActivityCompat.checkSelfPermission(this,
-                Manifest.permission.ACCESS_FINE_LOCATION) !=
-                PackageManager.PERMISSION_GRANTED &&
-                ActivityCompat.checkSelfPermission(this,
-                        Manifest.permission.ACCESS_COARSE_LOCATION) !=
-                        PackageManager.PERMISSION_GRANTED) {
-            return;
+        if (!real) {
+            fakeLocationCallbacks(); // for testing using polyline points
+        } else {
+            if (checkLocationPermission()) fusedLocationProviderClient.requestLocationUpdates
+                    (locationRequest, locationCallback, null);
         }
-
-        fusedLocationProviderClient.requestLocationUpdates
-                (locationRequest, locationCallback, null);
     }
 
-    @Override
-    public void onMapReady(@NonNull GoogleMap googleMap) {
-        googleMap.setTrafficEnabled(true);
-        map = googleMap;
-        UiSettings uiSettings = map.getUiSettings();
-        uiSettings.setMyLocationButtonEnabled(true);
-        map.setMapType(GoogleMap.MAP_TYPE_SATELLITE);
-        //navigationRoute();
-        afterOnMapReady();
+    private void fakeLocationCallbacks() {
+
+        timer = new Timer();
+        timer.schedule(new TimerTask() {
+            @Override
+            public void run() {
+                if (polyLineList == null) polyLineList = new ArrayList<>();
+                if (currentPointOnPolyLine >= polyLineList.size()) {
+                    timer.cancel();
+                    return;
+                }
+                currentLocation = toLocation(polyLineList.get(currentPointOnPolyLine++));
+                runOnUiThread(() -> {
+                    LatLng lastLngCurrent = toLatLng(currentLocation);
+
+                    if (PolyUtil.containsLocation(lastLngCurrent, polyLineList, true)) {
+                        updateCameraPosition(currentLocation);
+                    } else {
+                        Toast.makeText(MainActivity.this, "Driver outside of path", Toast.LENGTH_SHORT).show();
+                    }
+                });
+            }
+        }, 1000, 3000);
+
+    }
+
+    // Why needed? check below link
+    //https://stackoverflow.com/questions/54903593
+    private LatLng getMarkerProjectionOnSegment(
+            LatLng carPos, List<LatLng> segment, Projection projection) {
+        LatLng markerProjection = null;
+
+        Point carPosOnScreen = projection.toScreenLocation(carPos);
+        Point p1 = projection.toScreenLocation(segment.get(0));
+        Point p2 = projection.toScreenLocation(segment.get(1));
+        Point carPosOnSegment = new Point();
+
+        float denominator = (p2.x - p1.x) * (p2.x - p1.x) + (p2.y - p1.y) * (p2.y - p1.y);
+        // p1 and p2 are the same
+        if (Math.abs(denominator) <= 1E-10) {
+            markerProjection = segment.get(0);
+        } else {
+            float t = (carPosOnScreen.x * (p2.x - p1.x) - (p2.x - p1.x) * p1.x
+                    + carPosOnScreen.y * (p2.y - p1.y) - (p2.y - p1.y) * p1.y) / denominator;
+            carPosOnSegment.x = (int) (p1.x + (p2.x - p1.x) * t);
+            carPosOnSegment.y = (int) (p1.y + (p2.y - p1.y) * t);
+            markerProjection = projection.fromScreenLocation(carPosOnSegment);
+        }
+        return markerProjection;
+    }
+
+    private void recenterMap() {
+
+        /* It means we animate camera with current Location
+         * Reason - Suppose want to see the path ahead of them,
+         * so they try to move map with finger but they can't because
+         * we are changing the camera position every time we get location update
+         *
+         * So here we pause using that boolean and in update Camera position method w
+         * we do required code. */
+
+        needRecenter = true;
+        zoomCurrent = 17;
+        tiltCurrent = 45f;
+
+        if (lastLocation != null && currentLocation != null) {
+            float bearing = (float) SphericalUtil.computeHeading(toLatLng(lastLocation), toLatLng(currentLocation));
+            map.animateCamera(CameraUpdateFactory.newCameraPosition
+                    (new CameraPosition.Builder().target(toLatLng(currentLocation)).zoom(zoomCurrent).bearing(bearing).tilt(45f).build()));
+        }
+
+        tvb_recenter.setVisibility(View.GONE);
     }
 
     private void drawDirections() {
+        tvb_getDirections.setEnabled(false);
 
         Retrofit retrofit = new Retrofit.Builder()
                 .addConverterFactory(GsonConverterFactory.create())
@@ -350,16 +557,201 @@ public class MainActivity extends AppCompatActivity
                 .build();
 
         apiInterface = retrofit.create(ApiInterface.class);
+        showProgressBar(true, "Please wait\n We are finding best directions for you...");
 
         try {
-            String origin = latLngOrigin.latitude + "," + latLngOrigin.longitude;
-            String destination = latLngDestination.latitude + "," + latLngDestination.longitude;
+            String origin = this.origin.latitude + "," + this.origin.longitude;
+            String destination = this.destination.latitude + "," + this.destination.longitude;
             getDirection(origin, destination);
         } catch (Exception e) {
             e.printStackTrace();
-            Toast.makeText(this, "Problem Occurred", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Problem Occurred - " + e.getMessage(), Toast.LENGTH_SHORT).show();
+            dialogView.cancel();
+            tvb_getDirections.setEnabled(true);
         }
 
+    }
+
+    // this gets direction and draws polyline also
+    private void getDirection(String origin, String destination) {
+
+        apiInterface.getDirectionFrom("driving", "less_driving"
+                , origin, destination
+                , getString(R.string.map_api_key))
+                .subscribeOn(Schedulers.io())
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(new SingleObserver<Result>() {
+
+                    @Override
+                    public void onSuccess(@NonNull Result result) {
+
+                        polyLineList = new ArrayList<>();
+                        System.out.println("Apple -> " + result.toString());
+
+                        for (int i = 0; i < result.getRoutes().size(); i++) {
+                            String polyLine = result.getRoutes().get(i)
+                                    .getOverview_polyline().getPoints();
+                            polyLineList.addAll(PolyUtil.decode(polyLine));
+                        }
+
+                        PolylineOptions polyLineOptions = new PolylineOptions()
+                                .color(ContextCompat.getColor(getApplicationContext(),
+                                        colorPolyLine))
+                                .width(widthPolyLine)
+                                .startCap(new ButtCap())
+                                .jointType(JointType.ROUND)
+                                .addAll(polyLineList);
+
+                        // copying polyline for smooth car movement
+                        listPolygonPoints.addAll(polyLineList);
+
+                        //adding polyline in a list (to remove in future)
+                        listAllPolyLines.add(map.addPolyline(polyLineOptions));
+
+
+                        // polyline created
+                        LatLngBounds.Builder builder = new LatLngBounds.Builder();
+                        builder.include(MainActivity.this.origin);
+                        builder.include(MainActivity.this.destination);
+                        // animating camera to our navigation route
+                        map.animateCamera(CameraUpdateFactory.newLatLngBounds(builder.build(), 100));
+
+                        // adding the car marker
+                        markerCar = map.addMarker(new MarkerOptions()
+                                .position(MainActivity.this.origin)
+                                .icon(BitmapDescriptorFactory.fromBitmap(bitmapCar))
+                                // Specifies the anchor to be at a particular point in the marker image.
+                                .anchor(0.5f, 1));
+                        listAllMarkers.add(markerCar); // to remove when stop driving
+
+                        if (listPolygonPoints.size() == 0) {
+                            toast("Sorry: No directions for this route");
+                        } else {
+                            tripDistance = SphericalUtil.computeLength(listPolygonPoints) / 1000;
+                            tv_dataRealtime.setText("Trip Distance: " + String.format("%.2f", tripDistance) + " Km");
+                            hideViews(new View[]{tvb_getDirections});
+                            showViews(new View[]{tvb_startDriving, tv_dataRealtime});
+                        }
+                        dialogView.cancel();
+                        tvb_getDirections.setEnabled(true);
+                    }
+
+                    @Override
+                    public void onError(@NonNull Throwable e) {
+                        toast("Error in drawing directions");
+                        dialogView.cancel();
+                        tvb_getDirections.setEnabled(true);
+                    }
+
+                    @Override
+                    public void onSubscribe(@NonNull Disposable d) {
+
+                    }
+
+                });
+    }
+
+    // For Roads api
+    // https://stackoverflow.com/questions/47329243 (Why needed? check this link)
+    private String buildRequestUrl(List<LatLng> trackPoints) {
+        StringBuilder url = new StringBuilder();
+        url.append("https://roads.googleapis.com/v1/snapToRoads?path=");
+
+        for (LatLng trackPoint : trackPoints) {
+            url.append(String.format("%8.5f", trackPoint.latitude));
+            url.append(",");
+            url.append(String.format("%8.5f", trackPoint.longitude));
+            url.append("|");
+        }
+        url.delete(url.length() - 1, url.length());
+        url.append("&interpolate=true");
+        url.append(String.format("&key=%s", R.string.map_api_key));
+
+        return url.toString();
+    }
+
+    private class GetSnappedPointsAsyncTask extends AsyncTask<List<LatLng>, Void, List<LatLng>> {
+
+        protected void onPreExecute() {
+            super.onPreExecute();
+        }
+
+        protected List<LatLng> doInBackground(List<LatLng>... params) {
+
+            List<LatLng> snappedPoints = new ArrayList<>();
+
+            HttpURLConnection connection = null;
+            BufferedReader reader = null;
+
+            try {
+                URL url = new URL(buildRequestUrl(params[0]));
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.connect();
+
+                InputStream stream = connection.getInputStream();
+
+                reader = new BufferedReader(new InputStreamReader(stream));
+                StringBuilder jsonStringBuilder = new StringBuilder();
+
+                StringBuffer buffer = new StringBuffer();
+                String line = "";
+
+                while ((line = reader.readLine()) != null) {
+                    buffer.append(line + "\n");
+                    jsonStringBuilder.append(line);
+                    jsonStringBuilder.append("\n");
+                }
+
+                JSONObject jsonObject = new JSONObject(jsonStringBuilder.toString());
+                JSONArray snappedPointsArr = jsonObject.getJSONArray("snappedPoints");
+
+                for (int i = 0; i < snappedPointsArr.length(); i++) {
+                    JSONObject snappedPointLocation = ((JSONObject) (snappedPointsArr.get(i))).getJSONObject("location");
+                    double lattitude = snappedPointLocation.getDouble("latitude");
+                    double longitude = snappedPointLocation.getDouble("longitude");
+                    snappedPoints.add(new LatLng(lattitude, longitude));
+                }
+
+            } catch (MalformedURLException e) {
+                e.printStackTrace();
+            } catch (IOException e) {
+                e.printStackTrace();
+            } catch (JSONException e) {
+                e.printStackTrace();
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+                try {
+                    if (reader != null) {
+                        reader.close();
+                    }
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+
+            return snappedPoints;
+        }
+
+        @Override
+        protected void onPostExecute(List<LatLng> result) {
+            super.onPostExecute(result);
+
+            PolylineOptions polyLineOptions = new PolylineOptions();
+            polyLineOptions.addAll(result);
+            polyLineOptions.width(5);
+            polyLineOptions.color(Color.RED);
+            map.addPolyline(polyLineOptions);
+
+            LatLngBounds.Builder builder = new LatLngBounds.Builder();
+            builder.include(result.get(0));
+            builder.include(result.get(result.size() - 1));
+            LatLngBounds bounds = builder.build();
+            map.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds, 10));
+
+        }
     }
 
     // open intent to search and result in activity results (override)
@@ -382,173 +774,65 @@ public class MainActivity extends AppCompatActivity
 
     }
 
-    // this gets direction and draws polyline also
-    private void getDirection(String origin, String destination) {
+    private void updateCarLocation(Location currentLoc) {
 
-        apiInterface.getDirectionFrom("driving", "less_driving"
-                , origin, destination
-                , getString(R.string.map_api_key))
-                .subscribeOn(Schedulers.io())
-                .observeOn(AndroidSchedulers.mainThread())
-                .subscribe(new SingleObserver<Result>() {
+        boolean isValidIndex = currentPointOnPolyLine < listPolygonPoints.size() - 1;
+        if (isValidIndex) {
+            LatLng prevLatLng;
+            if (currentPointOnPolyLine == 0)
+                prevLatLng = listPolygonPoints.get(currentPointOnPolyLine);
+            else prevLatLng = listPolygonPoints.get(currentPointOnPolyLine - 1);
 
-                    @Override
-                    public void onSuccess(@NonNull Result result) {
-
-                        polyLineList = new ArrayList<>();
-                        System.out.println("Apple -> " + result.toString());
-
-                        for (int i = 0; i < result.getRoutes().size(); i++) {
-                            String polyLine = result.getRoutes().get(i).getOverview_polyline().getPoints();
-                            polyLineList.addAll(decodePoly(polyLine));
-                        }
-
-                        polyLineOptions = new PolylineOptions()
-                                .color(ContextCompat.getColor(getApplicationContext(),
-                                        R.color.colorPrimary))
-                                .width(8)
-                                .startCap(new ButtCap())
-                                .jointType(JointType.ROUND)
-                                .addAll(polyLineList);
-
-                        //adding polyline in a list (to remove in future)
-                        listPloyLine.add(map.addPolyline(polyLineOptions));
-
-
-                        // polyline created
-                        LatLngBounds.Builder builder = new LatLngBounds.Builder();
-                        builder.include(latLngOrigin);
-                        builder.include(latLngDestination);
-                        // animating camera to our navigation route
-                        map.animateCamera(CameraUpdateFactory.newLatLngBounds(builder.build(), 100));
-                    }
-
-                    @Override
-                    public void onError(@NonNull Throwable e) {
-                        Toast.makeText(MainActivity.this, e.getMessage(), Toast.LENGTH_SHORT).show();
-                    }
-
-                    @Override
-                    public void onSubscribe(@NonNull Disposable d) {
-
-                    }
-
-                });
-        tv_startDriving.setVisibility(View.VISIBLE);
-        tv_getDirections.setVisibility(View.GONE);
-    }
-
-    // this is to decode polyline vertices
-    private List<LatLng> decodePoly(String encoded) {
-        List<LatLng> poly = new ArrayList<>();
-        int index = 0, len = encoded.length();
-        int lat = 0, lng = 0;
-
-        while (index < len) {
-            int b, shift = 0, result = 0;
-            do {
-                b = encoded.charAt(index++) - 63;
-                result |= (b & 0x1f) << shift;
-                shift += 5;
-            } while (b >= 0x20);
-            int dlat = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
-            lat += dlat;
-
-            shift = 0;
-            result = 0;
-            do {
-                b = encoded.charAt(index++) - 63;
-                result |= (b & 0x1f) << shift;
-                shift += 5;
-            } while (b >= 0x20);
-            int dlng = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
-            lng += dlng;
-
-            LatLng p = new LatLng((((double) lat / 1E5)),
-                    (((double) lng / 1E5)));
-            poly.add(p);
+            animateCarMove(markerCar, toLatLng(lastLocation),
+                    toLatLng(currentLoc), MOVE_ANIMATION_DURATION);
+            double bearing = SphericalUtil.computeHeading(prevLatLng, toLatLng(currentLoc));
+            markerCar.setRotation((float) bearing + 180); // reason - our svg need to rotate
         }
-
-        return poly;
     }
 
-    // ask for permission and play services availability?
-    private void initMapWork() {
-        askLocationPermission();
-        if (isServicesOk()) toast("Map Ready!");
-    }
+    private void animateCarMove(final Marker marker, final LatLng beginLatLng
+            , final LatLng endLatLng, final long myDuration) {
 
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String @NonNull [] permissions, @NonNull int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        final long startTime = SystemClock.uptimeMillis();
+        final Interpolator interpolator = new LinearInterpolator();
 
-        if (requestCode == REQUEST_CODE && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            toast("Permission Granted");
-        } else toast("Permission Denied");
+        final Handler handler = new Handler();
+        handler.post(new Runnable() {
+            @Override
+            public void run() {
+                // calculate phase of animation
+                long elapsed = SystemClock.uptimeMillis() - startTime;
 
-    }
+                // if phase is > 1, it means animation time is completed
+                float phase = interpolator.getInterpolation((float) elapsed / myDuration);
 
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+                double newLat, newLng;  // calculate new position for marker
 
-        if (requestCode == AUTOCOMPLETE_REQUEST_CODE) {
+                newLat = (endLatLng.latitude - beginLatLng.latitude)
+                        * phase + beginLatLng.latitude;
 
-            if (resultCode == RESULT_OK || resultCode == RESULT_CANCELED) {
-                //Place place = Autocomplete.getPlaceFromIntent(data);
-                //Log.i(TAG, "Place: " + place.getName() + ", " + place.getId());
+                double lngDelta = endLatLng.longitude - beginLatLng.longitude;
 
-                //LatLng latLngSearched = place.getLatLng();
-                // because places is not working
-                LatLng latLngSearched = new LatLng(26.900531, 75.742189);
-                listMarkers.add(map.addMarker(new MarkerOptions()
-                        .position(latLngSearched)));
+                if (Math.abs(lngDelta) > 180) lngDelta -= Math.signum(lngDelta) * 360;
+                newLng = lngDelta * phase + beginLatLng.longitude;
 
-                //.title(place.getName()));
+                // here we change marker position on map
+                marker.setPosition(new LatLng(newLat, newLng));
 
-                CameraPosition cameraPosition = new CameraPosition.Builder()
-                        .target(latLngSearched)
-                        .zoom(15)
-                        .build();
-
-                latLngDestination = latLngSearched;
-
-                map.animateCamera(CameraUpdateFactory.newCameraPosition(cameraPosition));
-
-                tv_getDirections.setVisibility(View.VISIBLE);
-                tv_markOnMap.setVisibility(View.INVISIBLE);
-
-            } else if (resultCode == AutocompleteActivity.RESULT_ERROR) {
-                Status status = Autocomplete.getStatusFromIntent(data);
-                Log.i(TAG, status.getStatusMessage());
-                toast("Error: Search Results :" + status.getStatusMessage());
-
-            } else if (resultCode == RESULT_CANCELED) {
-                // The user canceled the operation.
+                if (phase < 1.0) handler.postDelayed(this, 16);
+                // call next marker position
             }
-            return;
-        }
-        super.onActivityResult(requestCode, resultCode, data);
-    }
-
-    private void askLocationPermission() {
-
-        if (ContextCompat.checkSelfPermission(this,
-                Manifest.permission.ACCESS_FINE_LOCATION)
-                != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, REQUEST_CODE);
-        }
-    }
-
-    // return permission status
-    private boolean locationPermissionGranted() {
-        return ContextCompat.checkSelfPermission
-                (this, Manifest.permission.ACCESS_FINE_LOCATION)
-                == PackageManager.PERMISSION_GRANTED;
+        });
     }
 
     private void toast(String message) {
+        // shortcut for toast
         Toast.makeText(this, message,
                 Toast.LENGTH_SHORT).show();
+    }
+
+    private void createLog(String message) {
+        Log.d(TAG, "log: " + message);
     }
 
     // checking google play services available?
@@ -578,24 +862,6 @@ public class MainActivity extends AppCompatActivity
         return false;
     }
 
-    private void updateLocationUI() {
-        if (map == null) {
-            return;
-        }
-        try {
-            if (locationPermissionGranted()) {
-                map.getUiSettings().setMyLocationButtonEnabled(true);
-            } else {
-                map.setMyLocationEnabled(false);
-                map.getUiSettings().setMyLocationButtonEnabled(false);
-                lastKnownLocation = null;
-                askLocationPermission();
-            }
-        } catch (SecurityException e) {
-            Log.e("Exception: %s", e.getMessage());
-        }
-    }
-
     private void getDeviceLocation() {
         /*
          * Get the best and most recent location of the device, which may be null in rare
@@ -606,81 +872,225 @@ public class MainActivity extends AppCompatActivity
                     currentLocation.getLongitude());
 
             map.animateCamera(CameraUpdateFactory.newLatLngZoom(
-                    latLng, DEFAULT_ZOOM + 3));
+                    latLng, DEFAULT_ZOOM));
             //listMarkers.add(map.addMarker(new MarkerOptions().position(latLng)));
 
             // we are just updating the origin for getting directions
-            latLngOrigin = latLng;
+            origin = latLng;
 
         }
         try {
-            if (locationPermissionGranted()) {
+            if (checkLocationPermission()) {
                 Task<Location> locationResult = fusedLocationProviderClient.getLastLocation();
-                locationResult.addOnCompleteListener(this, new OnCompleteListener<Location>() {
-                    @Override
-                    public void onComplete(@NonNull Task<Location> task) {
-                        if (task.isSuccessful()) {
-                            // Set the map's camera position to the current location of the device.
+                locationResult.addOnCompleteListener(
+                        this, new OnCompleteListener<Location>() {
+                            @Override
+                            public void onComplete(@NonNull Task<Location> task) {
+                                if (task.isSuccessful()) {
+                                    // Set the map's camera position to the current location of the device.
 
-                            currentLocation = task.getResult();
+                                    currentLocation = task.getResult();
 
-                            if (currentLocation != null) {
-                                LatLng latLng = new LatLng(currentLocation.getLatitude(),
-                                        currentLocation.getLongitude());
+                                    if (currentLocation != null) {
+                                        LatLng latLng = new LatLng(currentLocation.getLatitude(),
+                                                currentLocation.getLongitude());
 
-                                map.animateCamera(CameraUpdateFactory.newLatLngZoom(
-                                        latLng, DEFAULT_ZOOM + 3));
-                                //listMarkers.add(map.addMarker(new MarkerOptions().position(latLng)));
+                                        map.setMyLocationEnabled(true);
+                                        map.animateCamera(CameraUpdateFactory.newLatLngZoom(
+                                                latLng, DEFAULT_ZOOM));
+                                        // we are just updating the origin for getting directions
+                                        origin = latLng;
 
-                                // we are just updating the origin for getting directions
-                                latLngOrigin = latLng;
-
+                                    }
+                                } else {
+                                    Log.d(TAG, "Current location is null. Using defaults.");
+                                    Log.e(TAG, "Exception: %s", task.getException());
+                                    map.animateCamera(CameraUpdateFactory
+                                            .newLatLngZoom(defaultLocation, DEFAULT_ZOOM));
+                                    map.getUiSettings().setMyLocationButtonEnabled(false);
+                                }
                             }
-                        } else {
-                            Log.d(TAG, "Current location is null. Using defaults.");
-                            Log.e(TAG, "Exception: %s", task.getException());
-                            map.moveCamera(CameraUpdateFactory
-                                    .newLatLngZoom(defaultLocation, DEFAULT_ZOOM));
-                            map.getUiSettings().setMyLocationButtonEnabled(false);
-                        }
-                    }
-                });
+                        });
             }
         } catch (SecurityException e) {
             Log.e("Exception: %s", e.getMessage(), e);
         }
     }
 
-    // To reduce battery usage
-    @Override
-    protected void onPause() {
-        super.onPause();
-        savePower(true);
+    boolean checkLocationPermission() {
+        boolean isLocationGranted = ActivityCompat.checkSelfPermission(this,
+                Manifest.permission.ACCESS_FINE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this,
+                Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+
+        if (ContextCompat.checkSelfPermission(this,
+                Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, REQUEST_CODE);
+        }
+
+        return isLocationGranted;
+    }
+
+    private LatLng toLatLng(Location location) {
+        return new LatLng(location.getLatitude(), location.getLongitude());
+    }
+
+    private String toStringLatLng(LatLng latLng) {
+        return latLng.latitude + "," + latLng.longitude;
+    }
+
+    private String toStringLatLng(Location location) {
+        return location.getLatitude() + "," + location.getLongitude();
+    }
+
+    private Location toLocation(LatLng latLng) {
+        Location location = new Location("");
+        location.setLatitude(latLng.latitude);
+        location.setLongitude(latLng.longitude);
+        return location;
+    }
+
+    public Drawable toDrawable(int id) {
+        return ContextCompat.getDrawable(getContext(), R.drawable.ic_baseline_cancel_24);
+    }
+
+    public Context getContext() {
+        return MainActivity.this;
+    }
+
+    private Bitmap getBitmap(int drawableRes) {
+        Drawable drawable = getResources().getDrawable(drawableRes);
+        Canvas canvas = new Canvas();
+        Bitmap bitmap = Bitmap.createBitmap(drawable.getIntrinsicWidth(), drawable.getIntrinsicHeight(), Bitmap.Config.ARGB_8888);
+        canvas.setBitmap(bitmap);
+        drawable.setBounds(0, 0, drawable.getIntrinsicWidth(), drawable.getIntrinsicHeight());
+        drawable.draw(canvas);
+        return bitmap;
     }
 
     @Override
-    protected void onResume() {
-        super.onResume();
-        savePower(false);
+    public void onRequestPermissionsResult(
+            int requestCode, @NonNull String @NonNull [] permissions,
+            @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
+        if (requestCode == REQUEST_CODE && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            toast("Permission Granted");
+        } else toast("Permission Denied");
+
     }
 
-    @SuppressLint("MissingPermission")
-    private void savePower(boolean save) {
+    @Override
+    protected void onActivityResult(
+            int requestCode, int resultCode, @Nullable Intent data) {
 
-        if (map == null && checkPermit()) return;
-        map.setMyLocationEnabled(!save);
+        if (requestCode == AUTOCOMPLETE_REQUEST_CODE) {
 
-        if (!isDriving) return; // if not driving then nothing to do
-        if (fusedLocationProviderClient == null) return;
-        if (save) {
-            fusedLocationProviderClient.removeLocationUpdates(locationCallback);
-        } else {
-            fusedLocationProviderClient.requestLocationUpdates
-                    (locationRequest, locationCallback, null);
+            if (resultCode == RESULT_OK) {
+                Place place = Autocomplete.getPlaceFromIntent(data);
+                //Log.i(TAG, "Place: " + place.getName() + ", " + place.getId());
+
+                LatLng latLngSearched = place.getLatLng();
+                // because places is not working
+                //LatLng latLngSearched = new LatLng(26.900531, 75.742189);
+                listAllMarkers.add(map.addMarker(new MarkerOptions()
+                        .position(latLngSearched)));
+
+                //.title(place.getName()));
+
+                CameraPosition cameraPosition = new CameraPosition.Builder()
+                        .target(latLngSearched)
+                        .zoom(zoomCurrent)
+                        .build();
+
+                destination = latLngSearched;
+
+                map.animateCamera(CameraUpdateFactory.newCameraPosition(cameraPosition));
+
+                showViews(new View[]{tvb_getDirections, tvb_resetMarker, tvb_openGoogleMaps});
+                hideViews(new View[]{tvb_markDestination, tvb_search});
+
+            } else if (resultCode == AutocompleteActivity.RESULT_ERROR) {
+                Status status = Autocomplete.getStatusFromIntent(data);
+                Log.i(TAG, status.getStatusMessage());
+                toast("Error: Search Results :" + status.getStatusMessage());
+
+            } else if (resultCode == RESULT_CANCELED) {
+                // The user canceled the operation.
+            }
+            return;
+        }
+        super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    @Override
+    public void onMapReady(@NonNull GoogleMap googleMap) {
+        initMapWork(googleMap);
+    }
+
+    private void hideViews(View[] viewsArray) {
+        int visibility = View.GONE;
+        for (View view : viewsArray) {
+            view.setVisibility(visibility);
         }
     }
 
-    boolean checkPermit() {
-        return ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    private void showViews(View[] viewsArray) {
+        int visibility = View.VISIBLE;
+        for (View view : viewsArray) {
+            view.setVisibility(visibility);
+        }
+    }
+
+    private void removePolyLinesAndMarkers() {
+        // removing all markers, polylines when user stop driving
+        for (Polyline polyLine : listAllPolyLines)
+            polyLine.remove();
+
+        for (Marker marker : listAllMarkers)
+            marker.remove();
+
+        listAllPolyLines.clear();
+        listAllMarkers.clear();
+        // also clearing lists for next searches and trips
+    }
+
+    void showProgressBar() {
+        showProgressBar(false, "");
+    }
+
+    void showProgressBar(boolean showText, String text) {
+
+        /*to customize the progress bar then go to
+         * progressbar_viewxml.xml in layout folder*/
+
+        View view = getLayoutInflater().inflate(R.layout.layout_progressbar, null);
+        if (view.getParent() != null) ((ViewGroup) view.getParent()).removeView(view);
+
+        CircularProgressIndicator lpi = view.findViewById(R.id.home_progress_bar);
+        TextView textView = view.findViewById(R.id.progress_text_tv);
+        if (showText) textView.setText(text);
+        AlertDialog.Builder alertBldr_loading = new AlertDialog.Builder(this)
+                .setCancelable(false);
+        dialogView = alertBldr_loading.create();
+        dialogView.setView(view);
+        Window window = dialogView.getWindow();
+        if (window != null) window.setBackgroundDrawableResource(R.color.Transparent);
+        dialogView.show();
+    }
+
+    void openInGoogleMaps() {
+        if (destination == null) {
+            toast("Please select destination then try again");
+            return;
+        }
+
+        String geoUri = "http://maps.google.com/maps?q=loc:" +
+                destination.latitude + "," + destination.longitude + " (" + "" + ")";
+        Intent mapIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(geoUri));
+        if (mapIntent.resolveActivity(getContext().getPackageManager()) != null) {
+            getContext().startActivity(mapIntent);
+        }
     }
 }

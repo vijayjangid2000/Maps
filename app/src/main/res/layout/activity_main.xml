@@ -19,26 +19,53 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_margin="5dp"
             android:orientation="horizontal">
 
             <TextView
                 android:id="@+id/tv_markOnMap"
                 android:layout_width="match_parent"
                 android:layout_height="40dp"
+                android:layout_weight="1"
+                android:background="@drawable/textview_style"
+                android:drawableLeft="@drawable/ic_baseline_add_location_24"
+                android:drawableTint="@color/white"
+                android:gravity="center"
                 android:paddingLeft="10dp"
                 android:paddingRight="10dp"
-                android:layout_weight="1"
+                android:text="Mark On Map"
+                android:textColor="@color/white" />
+
+            <TextView
+                android:id="@+id/tv_openInMaps"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:layout_marginLeft="10dp"
+                android:layout_marginRight="10dp"
+                android:background="@drawable/textview_style"
+                android:drawableLeft="@drawable/ic_baseline_map_24"
+                android:drawableTint="@color/white"
                 android:gravity="center"
-                android:text="Mark On Map" />
+                android:padding="5dp"
+                android:text=" Open in Google Maps "
+                android:textColor="@color/white"
+                android:visibility="gone"
+                tools:visibility="visible" />
 
             <TextView
                 android:id="@+id/tv_searchResult"
                 android:layout_width="match_parent"
                 android:layout_height="40dp"
+                android:layout_marginLeft="10dp"
                 android:layout_weight="1"
+                android:background="@drawable/textview_style"
                 android:drawableRight="@drawable/quantum_ic_search_grey600_24"
+                android:drawableTint="@color/white"
                 android:gravity="center"
-                tools:text="Search Location" />
+
+                android:padding="5dp"
+                android:textColor="@color/white"
+                tools:text="Search " />
 
         </LinearLayout>
 
@@ -61,37 +88,144 @@
                 android:id="@+id/tv_getDirections"
                 android:layout_width="wrap_content"
                 android:layout_height="40dp"
-                android:gravity="center"
                 android:layout_marginLeft="10dp"
                 android:layout_marginRight="10dp"
+                android:background="@drawable/textview_style"
+                android:drawableLeft="@drawable/ic_baseline_directions_24"
+                android:drawableTint="@color/white"
+                android:gravity="center"
                 android:padding="7dp"
-                android:text="Get directions"
-                android:visibility="invisible"
-                tools:visibility="visible"/>
+                android:text=" Get directions"
+                android:textColor="@color/white"
+                android:visibility="gone"
+                tools:visibility="visible" />
 
             <TextView
                 android:id="@+id/tv_startDriving"
                 android:layout_width="wrap_content"
                 android:layout_height="40dp"
-                android:gravity="center"
                 android:layout_marginLeft="10dp"
                 android:layout_marginRight="10dp"
+                android:background="@drawable/textview_style"
+                android:drawableLeft="@drawable/ic_baseline_directions_car_24"
+                android:drawableTint="@color/white"
+                android:gravity="center"
                 android:padding="7dp"
-                android:text="Start Driving"
-                android:visibility="invisible"
-                tools:visibility="visible"/>
+                android:text="  Start Driving"
+                android:textColor="@color/white"
+                android:visibility="gone"
+                tools:visibility="visible" />
 
             <TextView
                 android:id="@+id/tv_recenter"
                 android:layout_width="wrap_content"
                 android:layout_height="40dp"
-                android:gravity="center"
                 android:layout_marginLeft="10dp"
                 android:layout_marginRight="10dp"
+                android:background="@drawable/textview_style"
+                android:drawableLeft="@drawable/ic_baseline_center_focus_weak_24"
+                android:drawableTint="@color/white"
+                android:gravity="center"
+                android:padding="5dp"
+                android:text="  Recenter"
+                android:textColor="@color/white"
+                android:visibility="gone"
+                tools:visibility="visible" />
+
+
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingLeft="10dp"
+            android:paddingTop="5dp"
+            android:paddingRight="10dp"
+            android:paddingBottom="5dp">
+
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/switchUpdateType"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="@drawable/textview_style"
+                android:drawableLeft="@drawable/ic_baseline_gps_not_fixed_24"
+                android:drawableTint="@color/white"
                 android:padding="7dp"
-                android:text="Recenter"
-                android:visibility="invisible"
-                tools:visibility="visible"/>
+                android:text=" Real Updates "
+                android:textColor="@color/white" />
+
+            <TextView
+                android:id="@+id/tv_resetMarkers"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:layout_marginLeft="10dp"
+                android:layout_marginRight="10dp"
+                android:background="@drawable/textview_style"
+                android:drawableLeft="@drawable/ic_baseline_add_location_24"
+                android:gravity="center"
+                android:padding="5dp"
+                android:text=" Reset Destination "
+                android:textColor="@color/white"
+                android:visibility="gone"
+                tools:visibility="visible" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tv_data"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@color/darkGreen"
+                android:paddingLeft="10dp"
+                android:textColor="@color/white"
+                android:textSize="15sp"
+                android:visibility="gone"
+                tools:text="Distance: 45Km"
+                tools:visibility="visible">
+
+            </TextView>
+
+            <LinearLayout
+                android:id="@+id/ll_setZoom"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingLeft="10dp"
+                android:paddingRight="10dp"
+                android:paddingBottom="3dp"
+                android:background="@color/darkGreen">
+
+                <TextView
+                    android:id="@+id/tv_zoomLevel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="match_parent"
+                    android:textColor="@color/white"
+                    tools:text="Driving Zoom Levels: 18" />
+
+                <SeekBar
+                    android:id="@+id/seekbar_zoomSet"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:visibility="visible" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tv_tips"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="#F2F4ED"
+                android:paddingLeft="10dp"
+                android:text="Touch Map to stop animateCamera, Recenter again"
+                android:textSize="14sp">
+
+            </TextView>
 
 
         </LinearLayout>

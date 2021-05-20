@@ -1,4 +1,4 @@
 <resources>
-    <string name="app_name">Maps</string>
+    <string name="app_name">Maps Clone</string>
     <string name="map_api_key">AIzaSyB9GaE4iz1o2uB8X5BlRzCfKVIHLhRUMN4</string>
 </resources>
