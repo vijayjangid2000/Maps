@@ -1093,4 +1093,5 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             getContext().startActivity(mapIntent);
         }
     }
+
 }
