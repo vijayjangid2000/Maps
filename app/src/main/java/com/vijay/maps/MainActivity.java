@@ -25,7 +25,6 @@ import android.view.ViewGroup;
 import android.view.Window;
 import android.view.animation.Interpolator;
 import android.view.animation.LinearInterpolator;
-import android.widget.CompoundButton;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
 import android.widget.TextView;
@@ -151,7 +150,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             intervalFastestUpdate = 2000,
             MOVE_ANIMATION_DURATION = 1000;
 
-    SwitchCompat fakeSwitch;
+    SwitchCompat switchRealUpdates;
 
     AlertDialog dialogView; // show/hide progress bar
 
@@ -184,11 +183,9 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     // ask for permission and play services availability?
     private void initMapWork(GoogleMap googleMap) {
 
-        if (!checkLocationPermission()) {
-            toast("Please give permissions to use location.");
-        } else if (!isServicesOk()) {
-            toast("Play Services not available.");
-        }
+        if (!checkLocationPermission()) toast("Please give permissions to use location.");
+        else if (!isServicesOk()) toast("Play Services not available.");
+
         bitmapCar = getBitmap(R.drawable.ic_car);
 
         map = googleMap;
@@ -226,17 +223,20 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                 listSegment.add(next);
 
                 if (PolyUtil.isLocationOnPath(toLatLng(currentLocation),
-                        listSegment, true, 30)) {
+                        listSegment, true, 50)) {
 
                     if (areRealUpdates) {
                         LatLng snappedToSegment = getMarkerProjectionOnSegment(
                                 toLatLng(currentLocation), listSegment, map.getProjection());
                         currentLocation = toLocation(snappedToSegment);
                     }
+
                     updateCameraPosition(currentLocation);
+
                 } else {
                     Toast.makeText(MainActivity.this, "Not on path", Toast.LENGTH_SHORT).show();
                 }
+
 
             }
         };
@@ -247,96 +247,62 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         locationRequest.setFastestInterval(intervalFastestUpdate);
 
         tvb_recenter = findViewById(R.id.tv_recenter);
-        map.setOnMapClickListener(new GoogleMap.OnMapClickListener() {
-            @Override
-            public void onMapClick(@androidx.annotation.NonNull @NonNull LatLng latLng) {
-                if (isMarkingDestination) {
-                    listAllMarkers.add(map.addMarker(new MarkerOptions().position(latLng)));
-                    destination = latLng;
-                    isMarkingDestination = false;
-                    tvb_markDestination.setText("Mark On Map");
-                    hideViews(new View[]{tvb_search, tvb_markDestination});
-                    showViews(new View[]{tvb_getDirections, tvb_resetMarker, tvb_openGoogleMaps});
-                } else {
-                    needRecenter = false;
-                    showViews(new View[]{tvb_recenter});
-                }
+        map.setOnMapClickListener(latLng -> {
+            if (isMarkingDestination) {
+                listAllMarkers.add(map.addMarker(new MarkerOptions().position(latLng)));
+                destination = latLng;
+                isMarkingDestination = false;
+                tvb_markDestination.setText("Mark On Map");
+                hideViews(new View[]{tvb_search, tvb_markDestination});
+                showViews(new View[]{tvb_getDirections, tvb_resetMarker, tvb_openGoogleMaps});
+            } else {
+                needRecenter = false;
+                showViews(new View[]{tvb_recenter});
             }
         });
 
         tvb_search = findViewById(R.id.tv_searchResult);
         tvb_search.setText("Search Location");
-        tvb_search.setOnClickListener(view -> {
-            searchGoogleMap();
-        });
+        tvb_search.setOnClickListener(view -> searchGoogleMap());
 
         tvb_startDriving = findViewById(R.id.tv_startDriving);
-        tvb_startDriving.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                startDriving();
-            }
-        });
+        tvb_startDriving.setOnClickListener(view -> startDriving());
 
         tvb_getDirections = findViewById(R.id.tv_getDirections);
-        tvb_getDirections.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                drawDirections();
-            }
-        });
+        tvb_getDirections.setOnClickListener(view -> drawDirections());
 
-        tvb_recenter.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                recenterMap();
-            }
-        });
+        tvb_recenter.setOnClickListener(view -> recenterMap());
 
         tvb_markDestination = findViewById(R.id.tv_markOnMap);
-        tvb_markDestination.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                tvb_markDestination.setText("Please select a location on map.");
-                isMarkingDestination = true;
-                tvb_search.setVisibility(View.GONE);
-            }
+        tvb_markDestination.setOnClickListener(view -> {
+            tvb_markDestination.setText("Please select a location on map.");
+            isMarkingDestination = true;
+            tvb_search.setVisibility(View.GONE);
         });
 
-        fakeSwitch = findViewById(R.id.switchUpdateType);
-        fakeSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-            @Override
-            public void onCheckedChanged(CompoundButton compoundButton, boolean b) {
-                areRealUpdates = b;
-                if (b) toast("You will receive REAL Location Updates");
-                else toast("You will receive FAKE location Updates");
-            }
+        switchRealUpdates = findViewById(R.id.switchUpdateType);
+        switchRealUpdates.setOnCheckedChangeListener((compoundButton, b) -> {
+            areRealUpdates = b;
+            if (b) toast("You will receive REAL Location Updates");
+            else toast("You will receive FAKE location Updates");
         });
 
         tvb_resetMarker = findViewById(R.id.tv_resetMarkers);
-        tvb_resetMarker.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                for (Marker marker : listAllMarkers) marker.remove();
-                for (Polyline polyline : listAllPolyLines) polyline.remove();
-                listAllPolyLines.clear();
-                listAllMarkers.clear();
-                listPolygonPoints.clear();
-                listLivePolylinePoints.clear();
+        tvb_resetMarker.setOnClickListener(view -> {
+            for (Marker marker : listAllMarkers) marker.remove();
+            for (Polyline polyline : listAllPolyLines) polyline.remove();
+            listAllPolyLines.clear();
+            listAllMarkers.clear();
+            listPolygonPoints.clear();
+            listLivePolylinePoints.clear();
 
-                showViews(new View[]{tvb_search, tvb_markDestination});
-                hideViews(new View[]{tvb_resetMarker, tvb_getDirections, tvb_startDriving,
-                        tvb_recenter, tvb_openGoogleMaps, tv_dataRealtime});
-            }
+            showViews(new View[]{tvb_search, tvb_markDestination});
+            hideViews(new View[]{tvb_resetMarker, tvb_getDirections, tvb_startDriving,
+                    tvb_recenter, tvb_openGoogleMaps, tv_dataRealtime});
         });
 
         tvb_openGoogleMaps = findViewById(R.id.tv_openInMaps);
-        tvb_openGoogleMaps.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                openInGoogleMaps();
-            }
-        });
+        tvb_openGoogleMaps.setOnClickListener(view -> openInGoogleMaps());
 
         tv_dataRealtime = findViewById(R.id.tv_data); // for speed, distance etc.
 
@@ -383,10 +349,10 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             tvb_startDriving.setCompoundDrawablesWithIntrinsicBounds(
                     toDrawable(R.drawable.ic_baseline_cancel_24), null, null, null);
             map.setMyLocationEnabled(false);
-            startLocationCallback(areRealUpdates);
+            startLocationCallbacks(areRealUpdates);
             tvb_startDriving.setText(" Stop Driving?");
             hideViews(new View[]{tvb_markDestination, tvb_getDirections, tvb_search,
-                    tvb_resetMarker, fakeSwitch});
+                    tvb_resetMarker, switchRealUpdates});
             showViews(new View[]{tvb_recenter, linearL_setZoom});
         } else {
             stopDriving();
@@ -415,7 +381,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         listPolygonPoints.clear();
         listLivePolylinePoints.clear();
         map.setMyLocationEnabled(true);
-        fakeSwitch.setVisibility(View.VISIBLE);
+        switchRealUpdates.setVisibility(View.VISIBLE);
     }
 
     private void updateCameraPosition(Location currentLocation) {
@@ -463,7 +429,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     }
 
     // starts Handler for getting current location every 5 seconds
-    private void startLocationCallback(boolean real) {
+    private void startLocationCallbacks(boolean real) {
 
         if (!real) {
             fakeLocationCallbacks(); // for testing using polyline points
@@ -618,7 +584,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
                         // adding the car marker
                         markerCar = map.addMarker(new MarkerOptions()
-                                .position(MainActivity.this.origin)
+                                .position(polyLineList.get(0))
                                 .icon(BitmapDescriptorFactory.fromBitmap(bitmapCar))
                                 // Specifies the anchor to be at a particular point in the marker image.
                                 .anchor(0.5f, 1));
@@ -670,7 +636,8 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         return url.toString();
     }
 
-    private class GetSnappedPointsAsyncTask extends AsyncTask<List<LatLng>, Void, List<LatLng>> {
+    private class GetSnappedPointsAsyncTask extends
+            AsyncTask<List<LatLng>, Void, List<LatLng>> {
 
         protected void onPreExecute() {
             super.onPreExecute();
